@@ -1,0 +1,11 @@
+# Ignore build outputs
+dist/
+build/
+bin/
+obj/
+
+# Ignore specific large extensions
+*.dmg
+*.zip
+*.tar
+*.exe
