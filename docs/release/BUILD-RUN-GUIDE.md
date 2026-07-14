@@ -184,7 +184,7 @@ Current defaults are intentionally large enough for this application:
 
 ```text
 Xms = 2g
-Xmx = 10g
+Xmx = 6g
 MaxDirectMemorySize = 2g
 ```
 
@@ -194,7 +194,7 @@ Temporary Gradle property override:
 .\gradlew.bat --no-daemon -PbilliardsXmx=12g run --args="--threads=4"
 ```
 
-Temporary environment override:
+Temporary environment override example:
 
 ```powershell
 $env:BILLIARDS_XMX = "12g"

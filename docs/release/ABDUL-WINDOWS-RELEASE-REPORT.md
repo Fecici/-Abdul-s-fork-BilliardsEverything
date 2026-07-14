@@ -21,7 +21,7 @@ The most important release changes are:
 
 - Fixed Windows native build/link issues for MSYS2/UCRT64.
 - Targeted Java 17 explicitly.
-- Preserved the intended runtime memory settings: `-Xms2g`, `-Xmx10g`, `MaxDirectMemorySize=2g`.
+- Preserved the intended runtime memory settings: `-Xms2g`, `-Xmx6g`, `MaxDirectMemorySize=2g`.
 - Limited Gradle compile pressure with `org.gradle.workers.max=2`.
 - Added a user-facing app thread argument, `--threads=N`.
 - Pushed the resolved Java thread count into the native backend.
@@ -662,7 +662,7 @@ The build now supports the practical Windows path:
 - Adds MSYS2 bin to runtime `PATH` for `run`.
 - Adds MSYS2 bin to `testBackend`.
 - Keeps Java target/source at 17.
-- Keeps user runtime heap settings at 2g/10g/2g.
+- Keeps user runtime heap settings at 2g/6g/2g.
 - Adds native debug option with `-PbilliardsNativeDebug=true`.
 - Keeps `-Og` instead of `-O0` for native debug because unused legacy helper references can make `-O0` link fail.
 - Keeps compile load lower with `gradle.properties`.
