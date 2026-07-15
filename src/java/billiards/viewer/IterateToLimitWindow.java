@@ -110,7 +110,7 @@ public class IterateToLimitWindow {
         stage.setHeight(800);
         stage.setOnCloseRequest(event -> {
             this.results = null;
-            this.finish.set(true);
+            markFinishedIfPresent(this.finish);
 
             saveContentsToFile();
 
@@ -574,7 +574,7 @@ public class IterateToLimitWindow {
         // We are done. Set the results, and notify the observer.
         running = false;
         this.results = results;
-        this.finish.set(true);
+        markFinishedIfPresent(this.finish);
 
         return true;
     }
@@ -631,11 +631,18 @@ public class IterateToLimitWindow {
     }
 
     public void close() {
-        // Match the user's manual close behavior: stop pending iteration work and persist every text area.
+        // This window can be created as an AutoVary result sink without execute(),
+        // so no finish observer necessarily exists during main-window shutdown.
         this.results = null;
-        this.finish.set(true);
+        markFinishedIfPresent(this.finish);
         saveContentsToFile();
         this.stage.close();
+    }
+
+    static void markFinishedIfPresent(final SimpleBooleanProperty finish) {
+        if (finish != null) {
+            finish.set(true);
+        }
     }
 
     private Alert getInfoAlertDialogue(String header, String content) {

@@ -300,6 +300,17 @@ task testBackend(type: Exec, dependsOn: 'testExecutable') {
     //errorOutput = new FileOutputStream('build/test-results/test.err')
 }
 
+// The exact long-CS reproducer takes substantially longer than the normal
+// native suite. Keep it explicit for release validation and concurrency work.
+task testBackendSlow(type: Exec, dependsOn: 'testExecutable') {
+    commandLine 'build/exe/test/test'
+    environment 'BILLIARDS_RUN_SLOW_TESTS', '1'
+
+    if (isWindows) {
+        environment 'PATH', "${msys2NativePrefix}/bin;" + System.getenv('PATH')
+    }
+}
+
 // Make sure the C++ code is up to date when running the Java program
 run.dependsOn "backendSharedLibrary"
 //run.dependsOn "coverExecutable"

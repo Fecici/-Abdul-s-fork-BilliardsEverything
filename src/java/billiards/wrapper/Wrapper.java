@@ -38,6 +38,7 @@ public final class Wrapper {
     }
 
     private static final ReentrantLock NATIVE_VARY_LOCK = new ReentrantLock(true);
+    private static final ReentrantLock NATIVE_MRR_LOCK = new ReentrantLock(true);
 
     private static native void sqlite_error_logging();
     private static native void database_create(final String dbPath);
@@ -71,6 +72,26 @@ public final class Wrapper {
 
     private static void finishNativeVary() {
         NATIVE_VARY_LOCK.unlock();
+    }
+
+    private static void beginNativeMrr(final String operationName) {
+        // One MRR call already parallelizes curve generation and corner
+        // classification up to --threads. Serializing outer MRR calls avoids
+        // multiplying that worker budget when AutoVary submits several codes.
+        try {
+            NATIVE_MRR_LOCK.lockInterruptibly();
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting to start " + operationName, e);
+        }
+    }
+
+    private static void finishNativeMrr() {
+        NATIVE_MRR_LOCK.unlock();
+    }
+
+    private static RuntimeException nativeMrrFailure(final String operation, final Object code) {
+        return new RuntimeException(operation + " failed for " + code + ": " + backendLastError());
     }
 
     public static void createDatabase(final String dbPath) {
@@ -336,7 +357,13 @@ public final class Wrapper {
 
         final int codeNumbersLen = codeNumbersArray.length;
 
-        final int rval = save_to_database(codeNumbersArray, codeNumbersLen, pool.pointer);
+        final int rval;
+        beginNativeMrr("save MRR");
+        try {
+            rval = save_to_database(codeNumbersArray, codeNumbersLen, pool.pointer);
+        } finally {
+            finishNativeMrr();
+        }
 
         if (rval == 1) {
             return true;
@@ -344,8 +371,7 @@ public final class Wrapper {
             // empty set
             return false;
         } else if (rval == -1) {
-            System.err.println("warning: MRR failed for " + codeSeq);
-            return false;
+            throw nativeMrrFailure("MRR save", codeSeq);
         } else {
             throw new RuntimeException("unknown return value " + rval);
         }
@@ -356,7 +382,13 @@ public final class Wrapper {
 
         final int codeNumbersLen = codeNumbersArray.length;
 
-        final int rval = save_to_database(codeNumbersArray, codeNumbersLen, pool.pointer);
+        final int rval;
+        beginNativeMrr("save MRR");
+        try {
+            rval = save_to_database(codeNumbersArray, codeNumbersLen, pool.pointer);
+        } finally {
+            finishNativeMrr();
+        }
 
         if (rval == 1) {
             return true;
@@ -364,8 +396,7 @@ public final class Wrapper {
             // empty set
             return false;
         } else if (rval == -1) {
-            System.err.println("warning: MRR failed for " + codeNumbersArray);
-            return false;
+            throw nativeMrrFailure("MRR save", Arrays.toString(codeNumbersArray));
         } else {
             throw new RuntimeException("unknown return value " + rval);
         }
@@ -382,7 +413,13 @@ public final class Wrapper {
         final int codeNumbersLen = codeNumbersArray.length;
 
         final CPicture cpicture = new CPicture();
-        final int rval = load_picture(codeNumbersArray, codeNumbersLen, cpicture, pool.pointer);
+        final int rval;
+        beginNativeMrr("load MRR picture");
+        try {
+            rval = load_picture(codeNumbersArray, codeNumbersLen, cpicture, pool.pointer);
+        } finally {
+            finishNativeMrr();
+        }
 
         if (rval == 1) {
             final Picture picture = new Picture(cpicture);
@@ -397,8 +434,9 @@ public final class Wrapper {
             // empty set
             return Optional.empty();
         } else if (rval == -1) {
-            System.err.println("warning: MRR failed for " + codeSeq);
-            return Optional.empty();
+            // Optional.empty is reserved for a certified empty region. Treating
+            // a backend failure as empty caused Database to cache a false result.
+            throw nativeMrrFailure("MRR picture load", codeSeq);
         } else {
             throw new RuntimeException("unknown return value " + rval);
         }
@@ -423,14 +461,19 @@ public final class Wrapper {
         final CPicture cpicture = new CPicture();
         final int rval;
 
-        if ("empty".equals(lr)) {
-            rval = load_picture_lr(baseCodeNumbersArray, baseCodeNumbersLen,
-                                         codeNumbersArray, codeNumbersLen,
-                                         cpicture, pool.pointer);
-        }
-        else {
-            rval = load_picture_lr_expando(codeNumbersArray, codeNumbersLen,
-                cpicture, pool.pointer, lr);
+        beginNativeMrr("load left/right MRR picture");
+        try {
+            if ("empty".equals(lr)) {
+                rval = load_picture_lr(baseCodeNumbersArray, baseCodeNumbersLen,
+                                             codeNumbersArray, codeNumbersLen,
+                                             cpicture, pool.pointer);
+            }
+            else {
+                rval = load_picture_lr_expando(codeNumbersArray, codeNumbersLen,
+                    cpicture, pool.pointer, lr);
+            }
+        } finally {
+            finishNativeMrr();
         }
 
         if (rval == 1) {
@@ -446,10 +489,7 @@ public final class Wrapper {
             // empty set
             return Optional.empty();
         } else if (rval == -1) {
-            //System.err.println("warning: left rights failed for " + codeSeq);
-            //System.out.println("warning: left rights failed for " + codeSeq);
-
-            return Optional.empty();
+            throw nativeMrrFailure("left/right MRR picture load", codeSeq);
 
         } else {
             throw new RuntimeException("unknown return value " + rval);
@@ -468,7 +508,13 @@ public final class Wrapper {
         final int codeNumbersLen = codeNumbersArray.length;
 
         final CInfo cinfo = new CInfo();
-        final int rval = load_info(codeNumbersArray, codeNumbersLen, cinfo, pool.pointer);
+        final int rval;
+        beginNativeMrr("load MRR info");
+        try {
+            rval = load_info(codeNumbersArray, codeNumbersLen, cinfo, pool.pointer);
+        } finally {
+            finishNativeMrr();
+        }
 
         if (rval == 1) {
             final Info info = new Info(cinfo);
@@ -483,9 +529,7 @@ public final class Wrapper {
             // empty set
             return Optional.empty();
         } else if (rval == -1) {
-            System.err.println("warning: MRR failed for " + codeSeq);
-            // Empty normally means empty set, but in this case means calculation error
-            return Optional.empty();
+            throw nativeMrrFailure("MRR info load", codeSeq);
         } else {
             throw new RuntimeException("unknown return value " + rval);
         }

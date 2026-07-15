@@ -1,0 +1,14 @@
+autopolyvary:
+
+finished some codes, then the counter began counting rapidly and fast to 4444 while terminal did not move. looking through the viewer, it is clear that no coordinate got varyed called on it so nothing calculated for those ones. only the very first coord.
+
+[fixed 2026-07-15 in BUG-012] AutoPolyVary changed the map to the next OBO coordinate, but its coalesced region-image redraw was still running when candidate discovery read the image. The new map was therefore sampled against the previous coordinate's pixels, often producing an empty point list. That zero-work task completed immediately and the next coordinate cancelled the redraw, repeating through the end counter. Coordinate work now begins only after the matching redraw is committed. The terminal also reports each point and its uncovered candidate count.
+------------------------------------------------------------------------------------------------
+
+- remind me to add logs to the backend later, real ones, not cout << stuff.
+- [think about later] backend calculations maxxed all of my cpus. theres no way to control this? why doesn't it use only the number supplied to it?
+- any way to incrementally print the results of vary as they get found, so that you can cancel when you like for larger codes and still find a result in the terminal?
+- is java heap args getting passed in? jps -lv only shows the direct memory 2gb max thing.
+- cpus parked a lot during OSNO calculation in lipattern positive stable. i had about 6 in there, but i do believe it went faster which is nice.
+
+----------------------------------------------------

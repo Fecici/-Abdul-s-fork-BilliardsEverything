@@ -14,6 +14,10 @@
 #include <atomic>
 #include <thread>
 #include <limits>
+#include <memory>
+#include <mutex>
+
+#include <tbb/global_control.h>
 
 #include <unordered_map>
 
@@ -31,7 +35,29 @@ inline std::atomic<unsigned int>& configured_worker_count() {
     return worker_count;
 }
 
+inline std::mutex& tbb_worker_control_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+inline std::unique_ptr<tbb::global_control>& tbb_worker_control() {
+    static std::unique_ptr<tbb::global_control> control;
+    return control;
+}
+
 inline void billiards_set_worker_count(const unsigned int worker_count) {
+    if (worker_count == 0) {
+        throw std::invalid_argument("worker count must be positive");
+    }
+
+    // Boost pools read configured_worker_count for each operation. TBB uses a
+    // process-wide scheduler, so keep a global_control alive for the process to
+    // make --threads cap parallel_for work such as MRR corner classification.
+    std::lock_guard<std::mutex> lock{tbb_worker_control_mutex()};
+    tbb_worker_control().reset(new tbb::global_control{
+        tbb::global_control::max_allowed_parallelism,
+        static_cast<std::size_t>(worker_count)
+    });
     configured_worker_count().store(worker_count, std::memory_order_relaxed);
 }
 

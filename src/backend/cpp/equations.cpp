@@ -12,11 +12,6 @@
 #include "unfolding.hpp"
 #include "utils.hpp"
 
-#include <chrono>
-
-#include <boost/asio/post.hpp>
-#include <boost/asio/thread_pool.hpp>
-
 // WARNING: always make this class a temporary
 class LeftRightVariant final : public boost::static_visitor<LeftRight> {
   private:
@@ -122,45 +117,10 @@ static IntervalPolygon convert_to_interval(const RationalPolygon& rat_polygon) {
     return int_polygon;
 }
 
-static bool polygon_is_tiny(const IntervalPolygon& polygon) {
-    // Stop refining when the bounding box is far below display resolution.
-    static constexpr double TINY_THRESHOLD = 1e-12;
-
-    if (polygon.empty()) {
-        return true;
-    }
-
-    Real x_low = boost::multiprecision::lower(polygon[0].point[0]);
-    Real x_high = boost::multiprecision::upper(polygon[0].point[0]);
-    Real y_low = boost::multiprecision::lower(polygon[0].point[1]);
-    Real y_high = boost::multiprecision::upper(polygon[0].point[1]);
-
-    for (const auto& pair : polygon) {
-        const auto& x = pair.point[0];
-        const auto& y = pair.point[1];
-
-        const Real xl = boost::multiprecision::lower(x);
-        const Real xh = boost::multiprecision::upper(x);
-        const Real yl = boost::multiprecision::lower(y);
-        const Real yh = boost::multiprecision::upper(y);
-
-        if (xl < x_low) x_low = xl;
-        if (xh > x_high) x_high = xh;
-        if (yl < y_low) y_low = yl;
-        if (yh > y_high) y_high = yh;
-    }
-
-    return (x_high - x_low) < TINY_THRESHOLD && (y_high - y_low) < TINY_THRESHOLD;
-}
-
 // TODO give all of these more consistent names
 // TODO also do the refinement as the curves are generated
 // that should reduce the memory usage
 static boost::optional<IntervalPolygon> calculate_final_polygon(const std::vector<CodeNumber>& code_numbers, const std::vector<XYZ>& code_angles, const CurvesLR& curves) {
-
-    static constexpr size_t PARALLEL_THRESHOLD = 1000;
-    static constexpr size_t MAX_PARALLEL_THREADS = 8;
-
     const auto rational_polygon = calculate_bounding_polygon(code_numbers, code_angles);
 
     if (!rational_polygon) {
@@ -173,132 +133,33 @@ static boost::optional<IntervalPolygon> calculate_final_polygon(const std::vecto
  //   print_region(interval_polygon);
  // std::cout << std::endl;
 
-    const size_t total_sin = curves.first.size();
-    const size_t total_cos = curves.second.size();
-    const size_t total_curves = total_sin + total_cos;
-
-    if (total_curves <= PARALLEL_THRESHOLD) {
-        // Small jobs stay sequential to avoid thread-pool overhead and keep
-        // behavior close to the original code path.
-        for (const auto& kv : curves.first) {
-            if (polygon_is_tiny(interval_polygon)) {
-                break;
-            }
-
-            const auto maybe = refine_polygon(interval_polygon, kv.first);
-
-            if (!maybe) {
-                return boost::none;
-            }
-
-            interval_polygon = *maybe;
-        }
-
-        for (const auto& kv : curves.second) {
-            if (polygon_is_tiny(interval_polygon)) {
-                break;
-            }
-
-            const auto maybe = refine_polygon(interval_polygon, kv.first);
-
-            if (!maybe) {
-                return boost::none;
-            }
-
-            interval_polygon = *maybe;
-        }
-
-        return interval_polygon;
-    }
-
-    const unsigned int n_threads = billiards_worker_count(MAX_PARALLEL_THREADS);
-
-    std::vector<const Equation<Sin>*> sin_ptrs;
-    sin_ptrs.reserve(total_sin);
+    // Refinements are a dependent reduction: each edge stores the trigonometric
+    // equation and left/right witness that created it. Intersecting independently
+    // refined batch polygons preserves the geometric set but can retain a linear
+    // bounding edge, which cannot be serialized as an MRR boundary. Keep this
+    // reduction ordered. MRR is still parallel in curve generation and in the
+    // per-refinement corner classification performed by refine_polygon.
     for (const auto& kv : curves.first) {
-        sin_ptrs.push_back(&kv.first);
-    }
+        const auto maybe = refine_polygon(interval_polygon, kv.first);
 
-    std::vector<const Equation<Cos>*> cos_ptrs;
-    cos_ptrs.reserve(total_cos);
-    for (const auto& kv : curves.second) {
-        cos_ptrs.push_back(&kv.first);
-    }
-
-    struct Batch {
-        std::vector<const Equation<Sin>*> sin_curves;
-        std::vector<const Equation<Cos>*> cos_curves;
-    };
-
-    std::vector<Batch> batches(n_threads);
-    for (size_t i = 0; i < sin_ptrs.size(); ++i) {
-        batches[i % n_threads].sin_curves.push_back(sin_ptrs[i]);
-    }
-    for (size_t i = 0; i < cos_ptrs.size(); ++i) {
-        batches[i % n_threads].cos_curves.push_back(cos_ptrs[i]);
-    }
-
-    boost::asio::thread_pool pool(n_threads);
-    std::vector<boost::optional<IntervalPolygon>> batch_results(n_threads);
-
-    for (unsigned int t = 0; t < n_threads; ++t) {
-        boost::asio::post(pool, [&, t]() {
-            auto poly = interval_polygon;
-            const auto& batch = batches[t];
-
-            for (const auto* curve : batch.sin_curves) {
-                if (polygon_is_tiny(poly)) {
-                    break;
-                }
-                auto maybe = refine_polygon(poly, *curve);
-                if (!maybe) {
-                    return;
-                }
-                poly = std::move(*maybe);
-            }
-
-            // Each worker owns this local polygon. It first applies its assigned
-            // sine constraints, then its assigned cosine constraints; the main
-            // thread intersects all worker polygons after the pool joins.
-            for (const auto* curve : batch.cos_curves) {
-                if (polygon_is_tiny(poly)) {
-                    break;
-                }
-                auto maybe = refine_polygon(poly, *curve);
-                if (!maybe) {
-                    return;
-                }
-                poly = std::move(*maybe);
-            }
-
-            batch_results[t] = std::move(poly);
-        });
-    }
-
-    pool.join();
-
-    boost::optional<IntervalPolygon> result;
-    for (auto& batch_result : batch_results) {
-        if (!batch_result) {
+        if (!maybe) {
             return boost::none;
         }
 
-        if (!result) {
-            result = std::move(batch_result);
-        } else {
-            // Each batch applied a subset of half-plane constraints; intersecting
-            // the partial polygons combines those constraints regardless of
-            // batch order because geometric intersection is associative and
-            // commutative for these half-plane refinements.
-            auto maybe = intersect_polygons(*result, *batch_result);
-            if (!maybe) {
-                return boost::none;
-            }
-            result = std::move(maybe);
-        }
+        interval_polygon = std::move(*maybe);
     }
 
-    return result;
+    for (const auto& kv : curves.second) {
+        const auto maybe = refine_polygon(interval_polygon, kv.first);
+
+        if (!maybe) {
+            return boost::none;
+        }
+
+        interval_polygon = std::move(*maybe);
+    }
+
+    return interval_polygon;
 }
 
 static boost::optional<IntervalLineSegment> calculate_final_line_segment(const std::vector<CodeNumber>& code_numbers, const std::vector<XYZ>& code_angles, const LinComArrZ<XYEta>& constraint, const CurvesLR& curves) {

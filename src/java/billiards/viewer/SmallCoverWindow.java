@@ -298,6 +298,19 @@ public final class SmallCoverWindow {
         bottomText.setText(stable + "\n" + currentText);
     }
 
+    public boolean containsStableInfo(final String stable) {
+        final String target = stable.trim();
+        if (target.isEmpty()) {
+            return false;
+        }
+        for (final String line : bottomText.getText().split("\\R")) {
+            if (line.trim().equals(target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static Tuple2<String, String> cleanTriples(final String string, final ConnectionPool pool) {
 
         final Iterable<String> lines = Splitter.onPattern("\\R")

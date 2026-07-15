@@ -449,6 +449,8 @@ int32_t save_to_database(const int32_t* const code_numbers_ptr,
                          const int32_t code_numbers_len,
                          sqlite::ConnectionPool* const pool) {
 
+    clear_backend_error();
+
     const std::vector<CodeNumber> code_numbers{code_numbers_ptr, code_numbers_ptr + code_numbers_len};
 
     // We throw runtime_errors to indicate problems with the program. When this happens,
@@ -469,8 +471,7 @@ int32_t save_to_database(const int32_t* const code_numbers_ptr,
         return in;
 
     } catch (const std::runtime_error& except) {
-        std::cerr << "Calculation of " << code_numbers << " failed with error:\n"
-                  << except.what() << std::endl;
+        remember_backend_error("save_to_database", except);
 
         return -1;
     }
@@ -592,6 +593,8 @@ int32_t load_picture(const int32_t* const code_numbers_ptr,
                      CPicture* const cpicture,
                      sqlite::ConnectionPool* const pool) {
 
+    clear_backend_error();
+
     const std::vector<CodeNumber> code_numbers{code_numbers_ptr, code_numbers_ptr + code_numbers_len};
 
     // We throw runtime_errors to indicate problems with the program. When this happens,
@@ -646,8 +649,7 @@ int32_t load_picture(const int32_t* const code_numbers_ptr,
         return 1;
 
     } catch (const std::runtime_error& except) {
-        std::cerr << "Calculation of " << code_numbers << " failed with error:\n"
-                  << except.what() << std::endl;
+        remember_backend_error("load_picture", except);
 
         return -1;
     }
@@ -661,6 +663,7 @@ void cleanup_cpicture(const CPicture* const cpicture) {
 
 int32_t load_picture_lr_expando(const int32_t* const code_numbers_ptr, const int32_t code_numbers_len,
                         CPicture* const cpicture, sqlite::ConnectionPool* const pool, const char* const lr) {
+    clear_backend_error();
     const std::vector<CodeNumber> code_numbers{code_numbers_ptr, code_numbers_ptr + code_numbers_len};
 
     // We throw runtime_errors to indicate problems with the program. When this happens,
@@ -754,12 +757,8 @@ int32_t load_picture_lr_expando(const int32_t* const code_numbers_ptr, const int
         return 1;
 
     } catch (const std::runtime_error& except) {
-
-        //std::cerr << "Calculation of " << code_numbers << " failed with error:\n"
-        //          << except.what() << std::endl;
-
-        //return -1;
-        return 0;
+        remember_backend_error("load_picture_lr_expando", except);
+        return -1;
     }
 }
 
@@ -769,6 +768,7 @@ int32_t load_picture_lr_expando(const int32_t* const code_numbers_ptr, const int
 int32_t load_picture_lr(const int32_t* const base_code_numbers_ptr, const int32_t base_code_numbers_len,
                         const int32_t* const code_numbers_ptr, const int32_t code_numbers_len,
                         CPicture* const cpicture, sqlite::ConnectionPool* const pool) {
+    clear_backend_error();
     const std::vector<CodeNumber> base_code_numbers{base_code_numbers_ptr,
                                                     base_code_numbers_ptr + base_code_numbers_len};
     const std::vector<CodeNumber> code_numbers{code_numbers_ptr, code_numbers_ptr + code_numbers_len};
@@ -843,9 +843,7 @@ int32_t load_picture_lr(const int32_t* const base_code_numbers_ptr, const int32_
         return 1;
 
     } catch (const std::runtime_error& except) {
-        //std::cerr << "Calculation of " << code_numbers << " failed with error:\n"
-        //          << except.what() << std::endl;
-
+        remember_backend_error("load_picture_lr", except);
         return -1;
     }
 }
@@ -989,6 +987,8 @@ static void copy_to_cinfo(const Info& info, CInfo* const cinfo) {
 // 1 means non empty set
 int32_t load_info(const int32_t* const code_numbers_ptr, const int32_t code_numbers_len, CInfo* const cinfo, sqlite::ConnectionPool* const pool) {
 
+    clear_backend_error();
+
     const std::vector<CodeNumber> code_numbers{code_numbers_ptr, code_numbers_ptr + code_numbers_len};
 
     // We throw runtime_errors to indicate problems with the program. When this happens,
@@ -1014,8 +1014,7 @@ int32_t load_info(const int32_t* const code_numbers_ptr, const int32_t code_numb
         return in;
 
     } catch (const std::runtime_error& except) {
-        std::cerr << "Calculation of " << code_numbers << " failed with error:\n"
-                  << except.what() << std::endl;
+        remember_backend_error("load_info", except);
 
         return -1;
     }

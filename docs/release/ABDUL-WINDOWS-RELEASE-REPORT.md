@@ -1,6 +1,6 @@
 # Abdul Windows Release Report
 
-Date: 2026-07-14
+Date: 2026-07-14; concurrency addendum: 2026-07-15
 
 Primary source tree: Abdul Windows, `-Abdul-s-fork-BilliardsEverything`
 
@@ -25,6 +25,9 @@ The most important release changes are:
 - Limited Gradle compile pressure with `org.gradle.workers.max=2`.
 - Added a user-facing app thread argument, `--threads=N`.
 - Pushed the resolved Java thread count into the native backend.
+- Fixed the long-MRR boundary-provenance failure reported as `this isn't supposed to happen-x-y+2eta` while retaining safe internal MRR parallelism.
+- Fixed AutoPolyVary forking multiple task chains when a prior result covered the next coordinate.
+- Stopped native calculation failures from being cached and printed as mathematical empty sets.
 - Fixed the reflected viewer being shifted vertically by pinning the image stack to the actual 600x600 image size.
 - Added an `Add to Cover` checkbox next to the existing top Calculate button.
 - Added duplicate guards so that Calculate does not insert the same cover line twice.
@@ -70,6 +73,7 @@ Validation commands used during this release pass:
 .\gradlew.bat --no-daemon compileJava backendSharedLibrary
 .\gradlew.bat --no-daemon testBackend
 .\gradlew.bat --no-daemon test
+.\gradlew.bat --no-daemon testBackendSlow
 ```
 
 ## Change Register
@@ -707,9 +711,40 @@ Bounds:
 
 Native C++:
 
-Java pushes the resolved worker count into C++ with `backend_set_worker_threads`. Native-only scripts can still use `BILLIARDS_NATIVE_THREADS` when Java does not call the setter.
+Java pushes the resolved worker count into C++ with `backend_set_worker_threads`. The backend keeps a `tbb::global_control` alive so direct TBB work follows the same cap as Boost worker pools. Native-only scripts can still use `BILLIARDS_NATIVE_THREADS` when Java does not call the setter.
 
 Some native algorithms still pass an explicit local maximum to `billiards_worker_count(max)`. Those caps remain because they are algorithm-specific safety limits.
+
+### 2026-07-15 Concurrency And MRR Addendum
+
+The detailed source-to-failure analysis is in `CONCURRENCY-MRR-FIXES-2026-07-15.md`.
+
+The long MRR bug was a representation-invariant failure, not ordinary unsynchronized memory access. Independent workers refined copies of the original bounding polygon and the main thread intersected those partial polygons. The geometric intersection could be correct while retaining a linear bounding edge. MRR serialization requires every final edge to carry the trigonometric equation and left/right witness that created it, so the surviving `-x-y+2eta` edge reached `RearrangeVariant` and triggered the reported exception.
+
+The dependent curve-reduction order is now deterministic and complete. MRR remains parallel where results are independent: unfolding/curve generation uses worker-local containers, and each curve refinement classifies polygon corners with TBB. The configured `--threads` value caps TBB, and a fair interruptible Java lock prevents several outer MRR calls from multiplying that worker budget.
+
+Native return values now retain their mathematical meaning: `0` is a certified empty region, `1` is nonempty, and `-1` throws with the native diagnostic. `Database` therefore caches certified empty/nonempty results but never caches an internal failure as empty.
+
+AutoPolyVary now advances already-covered coordinates in one loop. A per-run controller owns the current task, executors, progress, and an atomic terminal state. This removes the old recurse-without-return branch that created multiple task chains, repeated coordinates, premature progress completion, duplicate cover lines, and repeated cancel banners.
+
+Validation on 2026-07-15:
+
+- `compileJava backendSharedLibrary` passed.
+- `testBackend test` passed; the native runner executed 33 cases.
+- `testBackendSlow` passed the exact reported 124-number CS with one and four workers and identical boundary data.
+- Java forward/reverse AutoPolyVary index tests passed.
+
+### BUG-007 Main-Window Shutdown Follow-Up
+
+The existing shutdown fix exposed an older nullable lifecycle assumption in `IterateToLimitWindow`. AutoVary can construct that window only as a LiPattern result sink, without calling `execute()`. In that state its `finish` observer is null. Main-window shutdown calls `IterateToLimitWindow.close()`, whose unconditional `finish.set(true)` produced the reported `NullPointerException` before shutdown completed.
+
+Manual close, task completion, and programmatic close now use one null-safe finish notifier. A real observer is still set to true when present; a result-sink-only window still clears transient results, saves all text, and closes without trying to notify a nonexistent observer. Java tests cover both null and initialized observer states.
+
+### BUG-012 AutoPolyVary Counter/Redraw Race
+
+AutoPolyVary previously changed the viewer map for the next OBO coordinate and immediately searched the current region image for uncovered points. The map change is synchronous, but the coalesced image redraw is asynchronous. Candidate discovery could therefore read the previous coordinate's image through the next coordinate's map, produce an empty point list, and complete a zero-work task. Each zero-work completion advanced again soon enough to cancel the pending redraw, which explains the counter racing to 4444 after only the first coordinate performed vary work.
+
+Coordinate work is now gated by the matching image-commit callback. Rendering still runs in the background, the JavaFX thread commits the completed frame, and only then does AutoPolyVary inspect pixels and start vary. The terminal reports every point and its uncovered candidate count, including an explicit message for a legitimately fully covered view. The Java ordering regression test and `backendSharedLibrary test` passed on 2026-07-15.
 
 ## Known Remaining Risks
 
@@ -727,6 +762,10 @@ Compile tests cannot prove JavaFX layout correctness. Volunteers should test:
 8. Cover, Small Cover, and Stables save state when the main app closes.
 9. AutoVary and CycleVary cancel preserve partial progress.
 10. Rapid zoom/toggle/load actions do not flash stale renders.
+11. AutoPolyVary traverses the reported 170-173 region once, reaches the true end once, and prints only one cancel/success banner.
+12. AutoPolyVary cover and small-cover output contain no duplicate exact code lines.
+13. Let AutoVary create the LiPattern result sink without opening LiPattern, then close the main window and confirm there is no `finish` null dereference.
+14. Run AutoPolyVary through the reported line-4444 range and confirm the counter waits for each redraw/calculation; each point should print its uncovered candidate count instead of advancing silently.
 
 ### Memory Testing Still Needed
 
@@ -755,6 +794,7 @@ Build:
 
 ```powershell
 .\gradlew.bat --no-daemon compileJava backendSharedLibrary testBackend test
+.\gradlew.bat --no-daemon testBackendSlow
 ```
 
 Launch:

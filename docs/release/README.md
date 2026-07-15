@@ -6,6 +6,7 @@ Start here for the July 2026 Abdul Windows handoff.
 
 - `ABDUL-WINDOWS-RELEASE-REPORT.md` - main human-readable report of bugs, fixes, optimizations, Gradle/native build changes, risks, and test checklist.
 - `BUILD-RUN-GUIDE.md` - practical Windows, macOS, and Linux setup and launch guide for volunteers.
+- `CONCURRENCY-MRR-FIXES-2026-07-15.md` - source-to-failure explanation and validation record for the MRR and AutoPolyVary concurrency fixes.
 
 ## Reference Docs
 

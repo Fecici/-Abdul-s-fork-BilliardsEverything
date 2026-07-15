@@ -104,7 +104,7 @@ Run with a worker-thread limit:
 
 The app defaults to half of detected logical processors. If `--threads=N` is supplied, Java clamps it to `1..availableProcessors-1` so the OS and JavaFX event thread have CPU headroom. On a 1-core machine, the maximum remains 1.
 
-The same resolved thread count is pushed into the native backend through `backend_set_worker_threads`.
+The same resolved thread count is pushed into the native backend through `backend_set_worker_threads`. It limits both the explicit Boost pools and TBB's process-wide scheduler. MRR calls are admitted one at a time because each admitted MRR already uses that native worker budget internally for curve generation and corner classification.
 
 ## Windows Validation Commands
 
@@ -119,6 +119,14 @@ Run native Boost tests:
 ```powershell
 .\gradlew.bat --no-daemon testBackend
 ```
+
+Run the exact long-CS MRR concurrency regression:
+
+```powershell
+.\gradlew.bat --no-daemon testBackendSlow
+```
+
+`testBackendSlow` calculates the reported 124-number CS with one and four native workers and requires identical serialized boundary data. It is separate from the fast suite so normal development does not inherit long-case cost.
 
 Run Java tests:
 

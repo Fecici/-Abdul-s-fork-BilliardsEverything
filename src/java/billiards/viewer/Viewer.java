@@ -81,8 +81,10 @@ import java.util.List;
 import java.util.Map.Entry;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.DoubleUnaryOperator;
 import java.util.stream.Stream;
 
@@ -5065,6 +5067,20 @@ public final class Viewer {
     private void zoom(final double xMax, final double xMin, final double yMax,
                       final double yMin, final ExecutorService executor) {
 
+        positionZoom(xMax, xMin, yMax, yMin);
+        renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, executor);
+    }
+
+    private void zoomAfterRender(final double xMax, final double xMin, final double yMax,
+                                 final double yMin, final ExecutorService executor,
+                                 final Runnable afterCommit,
+                                 final Consumer<RuntimeException> onFailure) {
+        positionZoom(xMax, xMin, yMax, yMin);
+        renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, executor, afterCommit, onFailure);
+    }
+
+    private void positionZoom(final double xMax, final double xMin, final double yMax, final double yMin) {
+
         if (((xMin == xMax) && (yMin == yMax)) || boyanRdoBtn.isSelected()) {
             final double size = map.pixelSize();
             map.setTranslateX(xMin - (SIDE / 2.0) * size);
@@ -5086,7 +5102,6 @@ public final class Viewer {
             map.setTranslateY((yMax + yMin) / 2 - (SIDE / 2.0) * size);
         }
         viewRectangleBF.add(map.getViewRectangle());
-        renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, executor);
     }
 
     private void btnCalculateAction(final ConnectionPool pool) {
@@ -5921,6 +5936,13 @@ public final class Viewer {
     void renderRegions(final LinkedHashMap<Storage, Color> regions,
                        final ImageView guideLinesImageView, final ImageView regionsImageView,
                        final ExecutorService executor) {
+        renderRegions(regions, guideLinesImageView, regionsImageView, executor, null, null);
+    }
+
+    private void renderRegions(final LinkedHashMap<Storage, Color> regions,
+                               final ImageView guideLinesImageView, final ImageView regionsImageView,
+                               final ExecutorService executor, final Runnable afterCommit,
+                               final Consumer<RuntimeException> onFailure) {
         final RenderOptions options = snapshotRenderOptions();
 
         // Coalescing is deliberately limited to the long-lived viewer executor.
@@ -5928,7 +5950,20 @@ public final class Viewer {
         // shut them down as part of task cleanup; those renders must stay
         // synchronous so progress-saving cancel paths still finish deterministically.
         if (!Utils.renderCoalescing || executor != executorService) {
-            commitRenderedImages(buildRenderedImages(regions, executor, options), guideLinesImageView, regionsImageView);
+            try {
+                commitRenderedImages(buildRenderedImages(regions, executor, options), guideLinesImageView, regionsImageView);
+                if (afterCommit != null) {
+                    // Coalescing is disabled for --threads=1. Defer the
+                    // continuation so a long run of covered/empty coordinates
+                    // cannot recurse synchronously through thousands of lines.
+                    Platform.runLater(afterCommit);
+                }
+            } catch (final RuntimeException e) {
+                if (onFailure == null) {
+                    throw e;
+                }
+                onFailure.accept(e);
+            }
             return;
         }
 
@@ -5952,6 +5987,10 @@ public final class Viewer {
                             || e instanceof CancellationException) {
                         return;
                     }
+                    if (onFailure != null) {
+                        Platform.runLater(() -> onFailure.accept(e));
+                        return;
+                    }
                     throw e;
                 }
 
@@ -5961,13 +6000,26 @@ public final class Viewer {
 
                 Platform.runLater(() -> {
                     if (generation == renderGeneration.get()) {
-                        commitRenderedImages(images, guideLinesImageView, regionsImageView);
+                        try {
+                            commitRenderedImages(images, guideLinesImageView, regionsImageView);
+                            if (afterCommit != null) {
+                                afterCommit.run();
+                            }
+                        } catch (final RuntimeException e) {
+                            if (onFailure == null) {
+                                throw e;
+                            }
+                            onFailure.accept(e);
+                        }
                     }
                 });
             });
         } catch (final RejectedExecutionException e) {
             // The app is usually closing if the persistent executor rejects a
             // redraw. Rendering a final stale image is not worth reviving work.
+            if (onFailure != null) {
+                onFailure.accept(e);
+            }
         }
     }
 
@@ -7568,87 +7620,154 @@ public final class Viewer {
         progress.show();
     }
 
-    private int drawAutoPolyVary(final int[] max, final int maxSubdivisions, final boolean autoCover, final boolean autoSmallCover, final boolean overrideSS,
-                                 final int currIdx, final int endIdx, final int stepIdx, final ConvexPolygon area, final ProgressMultiTask overallProgress,
-                                 final Optional<SimpleObjectProperty<Integer>> step, final Optional<Color> colorOpt,
-                                 final ExecutorService drawExecutor, final ExecutorService storageExecutor, final ExecutorService shotExecutor
-                                 ) {
-        return drawAutoPolyVary(max, maxSubdivisions, autoCover, autoSmallCover, overrideSS, currIdx, endIdx, stepIdx, area, overallProgress,
-                step, colorOpt, drawExecutor, storageExecutor, shotExecutor, new ArrayList<>());
+    private final class AutoPolyVaryRun {
+        private final int[] max;
+        private final boolean autoCover;
+        private final boolean autoSmallCover;
+        private final boolean overrideSS;
+        private final ProgressMultiTask progress;
+        private final Optional<SimpleObjectProperty<Integer>> step;
+        private final ExecutorService drawExecutor;
+        private final ExecutorService storageExecutor;
+        private final ExecutorService shotExecutor;
+        private final AtomicBoolean terminal = new AtomicBoolean(false);
+
+        private AutoPolyVaryRun(final int[] max, final boolean autoCover, final boolean autoSmallCover,
+                               final boolean overrideSS, final ProgressMultiTask progress,
+                               final Optional<SimpleObjectProperty<Integer>> step,
+                               final ExecutorService drawExecutor, final ExecutorService storageExecutor,
+                               final ExecutorService shotExecutor) {
+            this.max = max;
+            this.autoCover = autoCover;
+            this.autoSmallCover = autoSmallCover;
+            this.overrideSS = overrideSS;
+            this.progress = progress;
+            this.step = step;
+            this.drawExecutor = drawExecutor;
+            this.storageExecutor = storageExecutor;
+            this.shotExecutor = shotExecutor;
+        }
+
+        private boolean isTerminal() {
+            return terminal.get();
+        }
+
+        private void finish(final boolean cancelled) {
+            // Recursive task callbacks can arrive after cancellation. Only the
+            // first terminal callback may render, close executors, or advance
+            // SuperPolyVary, otherwise one run prints repeated ending banners.
+            if (!terminal.compareAndSet(false, true)) {
+                return;
+            }
+
+            renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, drawExecutor);
+            Utils.shutdownExecutorAsync(storageExecutor);
+            Utils.shutdownExecutorAsync(shotExecutor);
+            if (overrideSS) {
+                System.out.printf("Overrided Side Sum maximums: CS - %d, OSO - %d, OSNO - %d%n", max[3], max[4], max[5]);
+            }
+
+            if (cancelled) {
+                System.out.println("+------------------------------ AutoPolyVary Cancelled ------------------------------+");
+                if (autoCover) coverWindow.show();
+                if (autoSmallCover) smallCoverWindow.show();
+                step.ifPresent(value -> value.setValue(-1));
+            } else {
+                if (autoCover) {
+                    coverWindow.show();
+                    System.out.println("+-------------- AutoPolyVary finished successfully, CODES ARE IN COVER --------------+");
+                }
+                if (autoSmallCover) {
+                    smallCoverWindow.show();
+                    System.out.println("+-------------- AutoPolyVary finished successfully, CODES ARE IN SMALL COVER --------------+");
+                }
+                if (!autoCover && !autoSmallCover) {
+                    System.out.println("+------------------------ AutoPolyVary finished successfully ------------------------+");
+                }
+                step.ifPresent(value -> value.setValue(value.getValue() + 1));
+            }
+            progress.close();
+        }
+
+        private void fail() {
+            if (!terminal.compareAndSet(false, true)) {
+                return;
+            }
+            Utils.shutdownExecutorAsync(storageExecutor);
+            Utils.shutdownExecutorAsync(shotExecutor);
+            progress.close();
+            step.ifPresent(value -> value.setValue(-1));
+        }
     }
 
-    // Recursively iterate through the list of holes, running polyVary at each hole.
     private int drawAutoPolyVary(final int[] max, final int maxSubdivisions, final boolean autoCover, final boolean autoSmallCover, final boolean overrideSS,
                                  final int currIdx, final int endIdx, final int stepIdx, final ConvexPolygon area, final ProgressMultiTask overallProgress,
                                  final Optional<SimpleObjectProperty<Integer>> step, final Optional<Color> colorOpt,
-                                 final ExecutorService drawExecutor, final ExecutorService storageExecutor, final ExecutorService shotExecutor,
-                                 final ArrayList<Storage> previousCodes) {
-        // Move the screen
-        lineNumberTxt.setText(Integer.toString(currIdx + 1));
-        setOBO(currIdx, pool, drawExecutor);
+                                 final ExecutorService drawExecutor, final ExecutorService storageExecutor, final ExecutorService shotExecutor) {
+        final AutoPolyVaryRun run = new AutoPolyVaryRun(max, autoCover, autoSmallCover, overrideSS, overallProgress,
+                step, drawExecutor, storageExecutor, shotExecutor);
+        return drawAutoPolyVary(maxSubdivisions, currIdx, endIdx, stepIdx, area, colorOpt, run, new ArrayList<>());
+    }
 
-        final String[] coords = fileCodeSequences.get(currIdx).split(" ");
+    static boolean hasNextAutoPolyVaryIndex(final int currIdx, final int endIdx, final int stepIdx) {
+        if (stepIdx == 0) {
+            throw new IllegalArgumentException("AutoPolyVary step must not be zero");
+        }
+        return stepIdx > 0 ? currIdx + stepIdx <= endIdx : currIdx + stepIdx >= endIdx;
+    }
+
+    // Render each OBO coordinate before inspecting its pixels. positionZoom()
+    // changes the map immediately, while the full image redraw is asynchronous;
+    // sampling before commit pairs the new map with the old image and can turn
+    // every remaining coordinate into a zero-work task.
+    private int drawAutoPolyVary(final int maxSubdivisions, final int currIdx, final int endIdx,
+                                 final int stepIdx, final ConvexPolygon area, final Optional<Color> colorOpt,
+                                 final AutoPolyVaryRun run, final ArrayList<Storage> previousCodes) {
+        if (run.isTerminal()) {
+            return -1;
+        }
+
+        lineNumberTxt.setText(Integer.toString(currIdx + 1));
+        startAutoPolyVaryCoordinateAfterRender(
+                afterCommit -> setOBOAfterRender(currIdx, run.drawExecutor, afterCommit,
+                        failure -> {
+                            run.fail();
+                            throw failure;
+                        }),
+                () -> continueAutoPolyVaryCoordinate(maxSubdivisions, currIdx, endIdx, stepIdx, area,
+                        colorOpt, run, previousCodes));
+        return 0;
+    }
+
+    static void startAutoPolyVaryCoordinateAfterRender(final Consumer<Runnable> renderRequest,
+                                                        final Runnable coordinateWork) {
+        renderRequest.accept(coordinateWork);
+    }
+
+    private int continueAutoPolyVaryCoordinate(final int maxSubdivisions, final int taskIndex, final int endIdx,
+                                               final int stepIdx, final ConvexPolygon area,
+                                               final Optional<Color> colorOpt, final AutoPolyVaryRun run,
+                                               final ArrayList<Storage> previousCodes) {
+        if (run.isTerminal()) {
+            return -1;
+        }
+        if (run.progress.isCancelled()) {
+            run.finish(true);
+            return 0;
+        }
+
+        System.out.println("\n//------------- working on point " + (taskIndex + 1) + " -------------");
+        final String[] coords = fileCodeSequences.get(taskIndex).split(" ");
         final double rx = Math.toRadians(Double.parseDouble(coords[0]));
         final double ry = Math.toRadians(Double.parseDouble(coords[1]));
-
-        // Zhao Yu Li, Aug 6, 2025.
-        // To save time, we check if the current coordinate is inside any of the polygons formed the codes found from
-        // the previous coordinate. If yes, then we don't need to run Vary for this coordinate because a code from the
-        // last coordinate fills the square.
-        for (Storage storage : previousCodes) {
-            if (storage.classCodeSeq.stable) {
-                final Storage.Stable stable = (Storage.Stable) storage;
-                final Location location = stable.polygon.location(rx, ry);
-
-                if (location == Location.INSIDE) {
-                    System.out.println("\n//------------- working on point " + (currIdx + 1) + "-------------\nThis coordinate was filled by a code from the previous coordinate.");
-                    System.out.println(Utils.standard(storage.classCodeSeq, 1));
-
-                    overallProgress.increment(Math.abs(stepIdx));
-                    // Run at the next hole
-                    if(overallProgress.isCancelled()) { // It is possible for cancel to occur before the task is created
-                        renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, drawExecutor);
-                        Utils.shutdownExecutorAsync(storageExecutor);
-                        Utils.shutdownExecutorAsync(shotExecutor);
-                        if(overrideSS) {
-                            System.out.printf("Overrided Side Sum maximums: CS - %d, OSO - %d, OSNO - %d%n", max[3], max[4], max[5]);
-                        }
-                        System.out.println("+------------------------------ AutoPolyVary Cancelled ------------------------------+");
-                        overallProgress.close();
-                        if(autoCover) coverWindow.show();
-                        // Propagate cancellation for Super
-                        step.ifPresent(integerSimpleObjectProperty -> integerSimpleObjectProperty.setValue(-1));
-                    } else if((currIdx + stepIdx <= endIdx && !AutoPolyVaryLoad.Reverse) || (currIdx + stepIdx >= endIdx && AutoPolyVaryLoad.Reverse)) {
-                        drawAutoPolyVary(max, maxSubdivisions, autoCover, autoSmallCover, overrideSS, currIdx + stepIdx, endIdx, stepIdx, area, overallProgress, step, colorOpt, drawExecutor, storageExecutor, shotExecutor, previousCodes);
-                    } else {
-                        renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, drawExecutor);
-                        Utils.shutdownExecutorAsync(storageExecutor);
-                        Utils.shutdownExecutorAsync(shotExecutor);
-                        if (overrideSS) {
-                            System.out.printf("Overrided Side Sum maximums: CS - %d, OSO - %d, OSNO - %d%n", max[3], max[4], max[5]);
-                        }
-
-                        // Zhao Yu Li, Aug 6, 2025.
-                        // Also add to the small cover
-                        if (autoCover || autoSmallCover) {
-                            if (autoCover) {
-                                coverWindow.show();
-                                System.out.println("+-------------- AutoPolyVary finished successfully, CODES ARE IN COVER --------------+");
-                            }
-
-                            if (autoSmallCover) {
-                                smallCoverWindow.show();
-                                System.out.println("+-------------- AutoPolyVary finished successfully, CODES ARE IN SMALL COVER --------------+");
-                            }
-                        } else {
-                            System.out.println("+------------------------ AutoPolyVary finished successfully ------------------------+");
-
-                        }
-                        overallProgress.close();
-                        // Increment for superPoly
-                        step.ifPresent(integerSimpleObjectProperty -> integerSimpleObjectProperty.setValue(integerSimpleObjectProperty.getValue() + 1));
-                    }
-                }
+        for (final Storage storage : previousCodes) {
+            if (storage.classCodeSeq.stable
+                    && ((Storage.Stable) storage).polygon.location(rx, ry) == Location.INSIDE) {
+                System.out.println("This coordinate was filled by a code from the previous coordinate.");
+                System.out.println(Utils.standard(storage.classCodeSeq, 1));
+                advanceAutoPolyVary(maxSubdivisions, taskIndex, endIdx, stepIdx, area, colorOpt, run,
+                        previousCodes);
+                return 0;
             }
         }
 
@@ -7672,6 +7791,13 @@ public final class Viewer {
                 pointsFiltered.add(points.get(i+1));
             }
         }
+        System.out.println("//Uncovered vary coordinates: " + (pointsFiltered.size() / 2));
+        if (pointsFiltered.isEmpty()) {
+            System.out.println("//No uncovered coordinates to vary at this point.");
+            advanceAutoPolyVary(maxSubdivisions, taskIndex, endIdx, stepIdx, area, colorOpt, run,
+                    new ArrayList<>());
+            return 0;
+        }
         // We want to filter the codes to avoid recalculating any codes that are already drawn on screen
         final MutableSortedSet<ClassifiedCodeSequence> onScreenCodes = new TreeSortedSet<>();
         onScreenSequences.keySet().forEach(storage -> {onScreenCodes.add(storage.classCodeSeq);});
@@ -7680,13 +7806,16 @@ public final class Viewer {
         int mode = autoPolyVaryWindow.getMode();
         Integer numGroupToPrint = autoPolyVaryWindow.getNumGroupToPrint();
 
-        if (numGroupToPrint == null) return -1;
+        if (numGroupToPrint == null) {
+            run.finish(true);
+            return -1;
+        }
 
-        // Create the task
-        final PolyVaryTask task = new PolyVaryTask(pointsFiltered, onScreenCodes, boyanMenu, Array.ofAll(max), pool, overrideSS, storageExecutor, shotExecutor, regionsImageView, map, mode, numGroupToPrint);
+        // Create the only PolyVaryTask owned by this run at this coordinate.
+        final PolyVaryTask task = new PolyVaryTask(pointsFiltered, onScreenCodes, boyanMenu, Array.ofAll(run.max), pool,
+                run.overrideSS, run.storageExecutor, run.shotExecutor, regionsImageView, map, mode, numGroupToPrint);
         final ObservableList<Storage> partials = task.getPartials();
-        //final ProgressWithStatus progress = new ProgressWithStatus(task, "%d / %d", 0);
-        overallProgress.changeTask(task);
+        run.progress.changeTask(task);
 
         // Zhao Yu Li, Jun 25, 2025.
         // Determines whether to add vary results to the IterateToLimitWindow Cover
@@ -7697,190 +7826,94 @@ public final class Viewer {
 
         // Update screen when change detected
         partials.addListener((ListChangeListener.Change<? extends Storage> c) -> {
-            if(overallProgress.isCancelled()) return; // Don't update after cancel received. This prevents codes being printed after the ending line 
+            if(run.progress.isCancelled() || run.isTerminal()) return;
             while (c.next()) {
                 if(!c.wasAdded()) continue;
-                // Draw all new additions
-                c.getAddedSubList().forEach(storage -> {
-                    if(!onScreenSequences.containsKey(storage)) {
-                        final Color color;
-                        if(colorOpt.isPresent()) {
-                            color = colorOpt.get();
-                        } else {
-                            final int index = cycle.get();
-                            color = comboBoxColors.get(index);
-                        }
-                        addToOnScreenSequences(storage, color);
-                        renderRegion(storage, (WritableImage) regionsImageView.getImage(), color);
-
-                        if (mode == 0 || autoCover) {
-                            // print the code
-                            final String msg;
-                            final CodeType type = storage.codeType();
-
-                            String codeStr = "" + type;
-                            // String codeStr = "xxx " + type; //george july 26 2017 -
-                            // type whatever you want between the quotes in the line above
-                            // make sure to add a space after the xxx
-                            if (type.equals(CodeType.CS)) {
-                                codeStr += "  ";
-                            } else if (!type.equals(OSNO)) {
-                                codeStr += " ";
-                            }
-                            msg = codeStr + " (" + storage.codeLength() + ", " + storage.codeSum() + ") " + storage.toString();
-
-                            if (mode == 0) System.out.println(msg);
-                            if(autoCover) coverWindow.appendStablesInfo(msg);
-                            if(autoSmallCover) smallCoverWindow.appendStablesInfo(msg);
-                        }
-
-                        // Zhao Yu Li, Jun 25, 2025.
-                        // Add the code sequence - iteration pattern pair to the IterateToLimitWindow Cover
-                        addToIterToLimitCover(storage.toString(), addToAllPositive, addToPlusMinus, iterateToLimitWindow);
-                    }
-                });
+                c.getAddedSubList().forEach(storage -> processAutoPolyVaryStorage(storage, colorOpt, mode,
+                        addToAllPositive, addToPlusMinus, false, run));
             }
         });
 
         task.setOnSucceeded(e -> {
+            if (run.isTerminal()) return;
 
             final ObservableList<Storage> storages;
             try {
                 storages = task.get();
             } catch (InterruptedException | ExecutionException exception) {
+                run.fail();
                 throw new RuntimeException(exception);
             }
 
-            // This takes care of the very last codes completed, in case the listChangeListener doesn't catch them in time
-            storages.forEach(storage -> {
-                if(!onScreenSequences.containsKey(storage)) {
-                    final Color color;
-                    final int index = cycle.get();
-                    color = comboBoxColors.get(index);
-                    addToOnScreenSequences(storage, color);
-
-                    if (mode == 0 || autoCover) {
-                        // print the code
-                        final String msg;
-                        final CodeType type = storage.codeType();
-
-                        String codeStr = "" + type;
-                        // String codeStr = "xxx " + type; //george july 26 2017 -
-                        // type whatever you want between the quotes in the line above
-                        // make sure to add a space after the xxx
-                        if (type.equals(CodeType.CS)) {
-                            codeStr += "  ";
-                        } else if (!type.equals(OSNO)) {
-                            codeStr += " ";
-                        }
-                        msg = codeStr + " (" + storage.codeLength() + ", " + storage.codeSum() + ") " + storage.toString();
-
-                        if (mode == 0) System.out.println(msg);
-                        if(autoCover) coverWindow.appendStablesInfo(msg);
-                        if(autoSmallCover) smallCoverWindow.appendStablesInfo(msg);
-                    }
-
-                    // Zhao Yu Li, Jun 25, 2025.
-                    // Add the code sequence - iteration pattern pair to the IterateToLimitWindow Cover
-                    addToIterToLimitCover(storage.toString(), addToAllPositive, addToPlusMinus, iterateToLimitWindow);
-                }
-            });
-            overallProgress.increment(Math.abs(stepIdx));
-            // Run at the next hole
-            if(overallProgress.isCancelled()) { // It is possible for cancel to occur before the task is created
-                renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, drawExecutor);
-                Utils.shutdownExecutorAsync(storageExecutor);
-                Utils.shutdownExecutorAsync(shotExecutor);
-                if(overrideSS) {
-                    System.out.printf("Overrided Side Sum maximums: CS - %d, OSO - %d, OSNO - %d%n", max[3], max[4], max[5]);
-                }
-                System.out.println("+------------------------------ AutoPolyVary Cancelled ------------------------------+");
-                overallProgress.close();
-                if(autoCover) coverWindow.show();
-                // Propagate cancellation for Super
-                step.ifPresent(integerSimpleObjectProperty -> integerSimpleObjectProperty.setValue(-1));
-            } else if((currIdx + stepIdx <= endIdx && !AutoPolyVaryLoad.Reverse) || (currIdx + stepIdx >= endIdx && AutoPolyVaryLoad.Reverse)) {
-                drawAutoPolyVary(max, maxSubdivisions, autoCover, autoSmallCover, overrideSS, currIdx + stepIdx, endIdx, stepIdx, area, overallProgress, step, colorOpt, drawExecutor, storageExecutor, shotExecutor, new ArrayList<>(storages));
-            } else {
-                renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, drawExecutor);
-                Utils.shutdownExecutorAsync(storageExecutor);
-                Utils.shutdownExecutorAsync(shotExecutor);
-                if (overrideSS) {
-                    System.out.printf("Overrided Side Sum maximums: CS - %d, OSO - %d, OSNO - %d%n", max[3], max[4], max[5]);
-                }
-
-                // Zhao Yu Li, Aug 6, 2025.
-                // Also add to the small cover
-                if (autoCover || autoSmallCover) {
-                    if (autoCover) {
-                        coverWindow.show();
-                        System.out.println("+-------------- AutoPolyVary finished successfully, CODES ARE IN COVER --------------+");
-                    }
-
-                    if (autoSmallCover) {
-                        smallCoverWindow.show();
-                        System.out.println("+-------------- AutoPolyVary finished successfully, CODES ARE IN SMALL COVER --------------+");
-                    }
-                } else {
-                    System.out.println("+------------------------ AutoPolyVary finished successfully ------------------------+");
-
-                }
-                overallProgress.close();
-                // Increment for superPoly
-                step.ifPresent(integerSimpleObjectProperty -> integerSimpleObjectProperty.setValue(integerSimpleObjectProperty.getValue() + 1));
-            }
+            storages.forEach(storage -> processAutoPolyVaryStorage(storage, colorOpt, mode,
+                    addToAllPositive, addToPlusMinus, false, run));
+            advanceAutoPolyVary(maxSubdivisions, taskIndex, endIdx, stepIdx, area, colorOpt, run,
+                    new ArrayList<>(storages));
         });
 
         task.setOnCancelled(e -> {
-            partials.forEach(storage -> {
-                if(!onScreenSequences.containsKey(storage)) {
-                    final Color color;
-                    final int index = cycle.get();
-                    color = comboBoxColors.get(index);
-                    addToOnScreenSequences(storage, color);
-
-                    // print the code
-                    final String msg;
-                    final CodeType type = storage.codeType();
-
-                    String codeStr = "" + type;
-                    // String codeStr = "xxx " + type; //george july 26 2017 -
-                    // type whatever you want between the quotes in the line above
-                    // make sure to add a space after the xxx
-                    if (type.equals(CodeType.CS)) {
-                        codeStr += "  ";
-                    } else if (!type.equals(OSNO)) {
-                        codeStr += " ";
-                    }
-                    msg = codeStr + " (" + storage.codeLength() + ", " + storage.codeSum() + ") " + storage.toString();
-                    System.out.println(msg);
-                    if(autoCover) coverWindow.appendStablesInfo(msg);
-                }
-            });
-            renderRegions(onScreenSequences, guideLinesImageView, regionsImageView, drawExecutor);
-            Utils.shutdownExecutorAsync(storageExecutor);
-            Utils.shutdownExecutorAsync(shotExecutor);
-            if(overrideSS) {
-                System.out.printf("Overrided Side Sum maximums: CS - %d, OSO - %d, OSNO - %d%n", max[3], max[4], max[5]);
-            }
-            System.out.println("+------------------------------ AutoPolyVary Cancelled ------------------------------+");
-            overallProgress.close();
-            if(autoCover) coverWindow.show();
-            // Propagate cancellation for Super
-            step.ifPresent(integerSimpleObjectProperty -> integerSimpleObjectProperty.setValue(-1));
+            partials.forEach(storage -> processAutoPolyVaryStorage(storage, colorOpt, mode,
+                    addToAllPositive, addToPlusMinus, true, run));
+            run.finish(true);
         });
 
         task.setOnFailed(e -> {
-            //progress.close();
-            Utils.shutdownExecutorAsync(storageExecutor);
-            Utils.shutdownExecutorAsync(shotExecutor);
-            overallProgress.close();
-            // Propagate cancellation for Super
-            step.ifPresent(integerSimpleObjectProperty -> integerSimpleObjectProperty.setValue(-1));
+            run.fail();
             throw new RuntimeException(task.getException());
         });
-        drawExecutor.execute(task);
+        try {
+            run.drawExecutor.execute(task);
+        } catch (final RejectedExecutionException e) {
+            run.fail();
+            throw e;
+        }
         return 0;
+    }
+
+    private void advanceAutoPolyVary(final int maxSubdivisions, final int completedIndex, final int endIdx,
+                                     final int stepIdx, final ConvexPolygon area, final Optional<Color> colorOpt,
+                                     final AutoPolyVaryRun run, final ArrayList<Storage> previousCodes) {
+        run.progress.increment(Math.abs(stepIdx));
+        if (run.progress.isCancelled()) {
+            run.finish(true);
+        } else if (hasNextAutoPolyVaryIndex(completedIndex, endIdx, stepIdx)) {
+            drawAutoPolyVary(maxSubdivisions, completedIndex + stepIdx, endIdx, stepIdx, area, colorOpt, run,
+                    previousCodes);
+        } else {
+            run.finish(false);
+        }
+    }
+
+    private void processAutoPolyVaryStorage(final Storage storage, final Optional<Color> colorOpt, final int mode,
+                                            final boolean addToAllPositive, final boolean addToPlusMinus,
+                                            final boolean forcePrint, final AutoPolyVaryRun run) {
+        if (run.isTerminal() || onScreenSequences.containsKey(storage)) {
+            return;
+        }
+
+        final Color color = colorOpt.isPresent() ? colorOpt.get() : comboBoxColors.get(cycle.get());
+        addToOnScreenSequences(storage, color);
+        renderRegion(storage, (WritableImage) regionsImageView.getImage(), color);
+
+        final CodeType type = storage.codeType();
+        String codePrefix = type.toString();
+        if (type.equals(CodeType.CS)) {
+            codePrefix += "  ";
+        } else if (!type.equals(OSNO)) {
+            codePrefix += " ";
+        }
+        final String message = codePrefix + " (" + storage.codeLength() + ", " + storage.codeSum() + ") " + storage;
+
+        if (mode == 0 || forcePrint) {
+            System.out.println(message);
+        }
+        if (run.autoCover && !coverWindow.containsStableInfo(message)) {
+            coverWindow.appendStablesInfo(message);
+        }
+        if (run.autoSmallCover && !smallCoverWindow.containsStableInfo(message)) {
+            smallCoverWindow.appendStablesInfo(message);
+        }
+        addToIterToLimitCover(storage.toString(), addToAllPositive, addToPlusMinus, iterateToLimitWindow);
     }
 
 
@@ -8240,6 +8273,15 @@ public final class Viewer {
             }
         }
 
+    }
+
+    private void setOBOAfterRender(final int index, final ExecutorService executor,
+                                   final Runnable afterCommit,
+                                   final Consumer<RuntimeException> onFailure) {
+        final String[] coords = fileCodeSequences.get(index).split(" ");
+        final double x = Math.toRadians(Double.parseDouble(coords[0]));
+        final double y = Math.toRadians(Double.parseDouble(coords[1]));
+        zoomAfterRender(x, x, y, y, executor, afterCommit, onFailure);
     }
 
     // The pattern contains a list of the 1-based indices to add by the increment
