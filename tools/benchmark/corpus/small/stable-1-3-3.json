@@ -1,0 +1,11 @@
+{
+  "id": "stable-1-3-3",
+  "provenance": "Existing native worker-count regression test",
+  "sanitized": true,
+  "codeSequence": "1 3 3",
+  "expected": [
+    "classifies as a stable code type",
+    "calculate_stable returns a nonempty boundary",
+    "one-worker and two-worker boundaries are exactly equal"
+  ]
+}

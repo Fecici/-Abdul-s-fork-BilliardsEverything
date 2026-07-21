@@ -1,0 +1,12 @@
+{
+  "id": "nonempty-codes-to-15",
+  "provenance": "src/test/resources/nonempty_codes_to_15.txt",
+  "sanitized": true,
+  "inputFile": "src/test/resources/nonempty_codes_to_15.txt",
+  "expected": [
+    "every parsed stable input has a nonempty stable result",
+    "every parsed unstable input has a nonempty unstable result",
+    "the Boost test exits successfully"
+  ],
+  "note": "This fixture is medium by breadth, not necessarily by per-code difficulty."
+}

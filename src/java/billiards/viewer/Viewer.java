@@ -124,7 +124,6 @@ import javafx.scene.transform.Affine;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
-import javafx.util.StringConverter;
 
 import static billiards.codeseq.CodeType.OSNO;
 import static billiards.viewer.Utils.getCoverCodeString;
@@ -2566,41 +2565,7 @@ public final class Viewer {
                 + " calculate"));
         txtCodeSequence.setStyle(textBoxColor);
         txtCodeSequence.setPrefColumnCount(10);
-        txtCodeSequence.textProperty().bindBidirectional(
-                new SimpleObjectProperty<MutableIntList[]>(currentCodeNumbers),
-                new StringConverter<MutableIntList[]>() {
-                    @Override
-                    public MutableIntList[] fromString(String str) {
-                        final String[] strs = str.split(",");
-                        final MutableIntList[] result = new MutableIntList[strs.length];
-                        for (int i = 0; i < strs.length; i++) {
-                            final Optional<ImmutableIntList> opt = Utils.splitString(strs[i]);
-                            if (opt.isPresent()) {
-                                final MutableIntList list = new IntArrayList();
-                                list.addAll(opt.get());
-                                result[i] = list;
-                            } else {
-                                result[i] = new IntArrayList();
-                            }
-                        }
-                        return result;
-                    }
-
-                    @Override
-                    public String toString(MutableIntList[] codes) {
-                        final StringBuilder builder = new StringBuilder();
-                        for (int i = 0; i < codes.length; i++) {
-                            if (!codes[i].isEmpty()) {
-                                if (i != 1) {
-                                    builder.append(", ");
-                                }
-                                builder.append(codes[i].toString());
-                            }
-                        }
-                        return builder.toString();
-                    }
-                }
-        );
+        // abdul 20/07/2026 Let Calculate own parsing; the removed converter updated a disconnected property instead of currentCodeNumbers and could create a second input representation.
 
         txtCodeSequence2.setPromptText("Code Sequence");
         // make them always have the same text stuff
@@ -5128,11 +5093,15 @@ public final class Viewer {
         } else if (textCodeSeq.contains(",")) {
             // it's a triple
 
+            // abdul 20/07/2026 Reuse the exact successful Calculate results for Add to Cover so this path cannot reclassify or reload a different result.
+            final ArrayList<Optional<Storage>> calculatedStorages = new ArrayList<>();
             Utils.runAndWait(() -> {
                 String print = "";
                 int i = 0;
                 for (String tripCode : textCodeSeq.split(",")) {
-                    print += buttonCalulator(tripCode, pool, i) + ", ";
+                    final CalculationResult calculation = buttonCalculator(tripCode, pool, i);
+                    print += calculation.output + ", ";
+                    calculatedStorages.add(calculation.storage);
                     i++;
                 }
                 print += "~";
@@ -5143,44 +5112,37 @@ public final class Viewer {
                     System.out.println(print.replace(", ~", ""));
                 }
             });
-            appendCalculatedCodeToCoverIfRequested(pool);
+            appendCalculatedCodeToCoverIfRequested(calculatedStorages);
         } else {
             // it's a single code
-            System.out.println(buttonCalulator(textCodeSeq, pool, 0));
+            final CalculationResult calculation = buttonCalculator(textCodeSeq, pool, 0);
+            System.out.println(calculation.output);
             setupButtons(pool, 1);
             setupButtons(pool, 2);
-            appendCalculatedCodeToCoverIfRequested(pool);
+            appendCalculatedCodeToCoverIfRequested(Arrays.asList(calculation.storage));
         }
     }
 
-    private void appendCalculatedCodeToCoverIfRequested(final ConnectionPool pool) {
+    // abdul 20/07/2026 Accept only results produced by this Calculate request and avoid a second mutable-state/database pass.
+    private void appendCalculatedCodeToCoverIfRequested(
+            final List<Optional<Storage>> calculatedStorages) {
         if (!calculateAddToCoverCheckBox.isSelected()) {
             return;
         }
 
         final ArrayList<Storage> storages = new ArrayList<>();
         final StringBuilder tripleString = new StringBuilder();
-        for (int i = 0; i < currentCodeNumbers.length; i++) {
-            if (currentCodeNumbers[i].isEmpty()) {
-                continue;
-            }
-
-            final Either<InvalidCodeSequence, ClassifiedCodeSequence> either =
-                    ClassifiedCodeSequence.create(currentCodeNumbers[i]);
-            if (either.isLeft()) {
+        for (final Optional<Storage> optionalStorage : calculatedStorages) {
+            if (optionalStorage.isEmpty()) {
                 return;
             }
 
-            final Optional<Storage> storage = Database.loadStorage(either.get(), pool);
-            if (storage.isEmpty()) {
-                return;
-            }
-
+            final Storage storage = optionalStorage.get();
             if (tripleString.length() > 0) {
                 tripleString.append(", ");
             }
-            tripleString.append(storage.get().classCodeSeq);
-            storages.add(storage.get());
+            tripleString.append(storage.classCodeSeq);
+            storages.add(storage);
         }
 
         // The Cover window stores stable singles and stable-unstable-stable
@@ -5205,14 +5167,25 @@ public final class Viewer {
         }
     }
 
+    // abdul 20/07/2026 Keep the displayed calculation outcome and its exact Storage together through optional Cover publication.
+    private static final class CalculationResult {
+        final String output;
+        final Optional<Storage> storage;
+
+        CalculationResult(final String output, final Optional<Storage> storage) {
+            this.output = output;
+            this.storage = storage;
+        }
+    }
+
     // does the calculating for the btnCalculateAction
-    private String buttonCalulator(final String code, final ConnectionPool pool, final int n) {
+    private CalculationResult buttonCalculator(final String code, final ConnectionPool pool, final int n) {
         final Optional<ImmutableIntList> optional = Utils.splitString(code);
         if (optional.isPresent()) {
             currentCodeNumbers[n] = IntArrayList.newList(optional.get());
             setupButtons(pool, n);
 
-            return calculateCurrentCodeNumbers(pool, n);
+            return calculateCurrentCodeNumbersResult(pool, n);
 
         } else {
             final Alert alert = new Alert(AlertType.ERROR);
@@ -5221,7 +5194,7 @@ public final class Viewer {
             alert.setHeaderText("Invalid Input");
             alert.setContentText(String.format("Input %s is invalid.", code));
             alert.showAndWait();
-            return "";
+            return new CalculationResult("", Optional.empty());
         }
     }
 
@@ -6214,8 +6187,14 @@ public final class Viewer {
 
     // use when you get a new code sequence that you want to get info for
     private String calculateCurrentCodeNumbers(final ConnectionPool pool, final int i) {
+        return calculateCurrentCodeNumbersResult(pool, i).output;
+    }
+
+    // abdul 20/07/2026 Return the Storage from the original load so Add to Cover reuses the proven calculation result.
+    private CalculationResult calculateCurrentCodeNumbersResult(final ConnectionPool pool, final int i) {
 
         String result = "";
+        Optional<Storage> calculatedStorage = Optional.empty();
 
         if (!saveRegionsCheckBox.isSelected()) {
             // remove any code sequences
@@ -6241,6 +6220,7 @@ public final class Viewer {
 
 			if (optional.isPresent()) {
 				final Storage storage = optional.get();
+				calculatedStorage = optional;
 				result = codeSeq.toString();
 				final String value = calculateChooser.getValue();
 				if (value.equals("Region") || value.equals("All")) {
@@ -6270,7 +6250,7 @@ public final class Viewer {
 			}
 			codeWindow.show();
 		}
-        return result;
+        return new CalculationResult(result, calculatedStorage);
     }
 
     private void drawHorizontalLine(final double y, final double x1, final double x2,

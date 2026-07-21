@@ -6,7 +6,9 @@ obj/
 .gradle/
 
 # IDE and machine-local metadata
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 .idea/
 *.iml
 .agents/

@@ -1,0 +1,17 @@
+flowchart TD
+    O[Load coordinates and current cover] --> L[LiLuMaxVary or another vary family]
+    L --> K[Candidate codes]
+    K --> C[Calculate region / MRR]
+    C --> Q{Valid nonempty result?}
+    Q -- certified empty --> L
+    Q -- internal failure --> D[Debug; never cache as empty]
+    Q -- yes --> A[Add stable or valid triple to cover data]
+    A --> H[Find and inspect remaining holes]
+    H --> T{Need a different construction?}
+    T -- triples --> R[Tokarsky triples workflow]
+    T -- patterned family --> P[LiPattern / iterate-to-limit]
+    T -- hard local case --> M[Manual Vary plus Calculate]
+    T -- continue batch --> L
+    R --> A
+    P --> C
+    M --> C

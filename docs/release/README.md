@@ -7,6 +7,8 @@ Start here for the July 2026 Abdul Windows handoff.
 - `ABDUL-WINDOWS-RELEASE-REPORT.md` - main human-readable report of bugs, fixes, optimizations, Gradle/native build changes, risks, and test checklist.
 - `BUILD-RUN-GUIDE.md` - practical Windows, macOS, and Linux setup and launch guide for volunteers.
 - `CONCURRENCY-MRR-FIXES-2026-07-15.md` - source-to-failure explanation and validation record for the MRR and AutoPolyVary concurrency fixes.
+- `CALCULATE-ADD-TO-COVER-FIX-2026-07-20.md` - database-free reproduction and result-reuse fix for the reported long OSNO Calculate/Add-to-Cover discrepancy.
+- `SIGNIFICANT-APPLICATION-CHANGES.md` - neutral technical report on the significant correctness, concurrency, memory, algorithm, Linux-derived, and research-workflow changes, with detailed code excerpts and implementation constraints.
 
 ## Reference Docs
 

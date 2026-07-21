@@ -1,0 +1,118 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build: Java + backend",
+      "type": "process",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["--no-daemon", "compileJava", "backendSharedLibrary"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "JAVA_HOME": "C:\\Program Files\\Java\\jdk-17" }
+      },
+      "problemMatcher": ["$javac", "$gcc"],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "build: native debug + tests",
+      "type": "process",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["--no-daemon", "-PbilliardsNativeDebug=true", "backendSharedLibrary", "testExecutable"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "JAVA_HOME": "C:\\Program Files\\Java\\jdk-17" }
+      },
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "test: Java",
+      "type": "process",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["--no-daemon", "test"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "JAVA_HOME": "C:\\Program Files\\Java\\jdk-17" }
+      },
+      "problemMatcher": ["$javac"],
+      "group": "test"
+    },
+    {
+      "label": "test: backend",
+      "type": "process",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": ["--no-daemon", "testBackend"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "JAVA_HOME": "C:\\Program Files\\Java\\jdk-17" }
+      },
+      "problemMatcher": ["$gcc"],
+      "group": "test"
+    },
+    {
+      "label": "run: app waiting for Java debugger",
+      "type": "process",
+      "command": "${workspaceFolder}\\gradlew.bat",
+      "args": [
+        "--no-daemon",
+        "-PbilliardsNativeDebug=true",
+        "-PbilliardsShowVmSettings=true",
+        "run",
+        "--debug-jvm",
+        "--args=--threads=${input:workerCount}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "JAVA_HOME": "C:\\Program Files\\Java\\jdk-17" }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "docs: audit handbook",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}\\tools\\docs\\audit-handbook.ps1",
+        "-Mode", "enforce"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "benchmark: choose workload",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}\\tools\\benchmark\\run-benchmarks.ps1",
+        "-Workload", "${input:benchmarkWorkload}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "JAVA_HOME": "C:\\Program Files\\Java\\jdk-17" }
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "workerCount",
+      "type": "promptString",
+      "description": "Java/native worker count for this debug run",
+      "default": "2"
+    },
+    {
+      "id": "benchmarkWorkload",
+      "type": "pickString",
+      "description": "Correctness-first benchmark workload",
+      "options": [
+        "mrr-small-worker-contract",
+        "calculate-known-regions-medium",
+        "reported-long-cs-mrr"
+      ],
+      "default": "mrr-small-worker-contract"
+    }
+  ]
+}

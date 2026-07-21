@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "workloads": [
+    {
+      "id": "mrr-small-worker-contract",
+      "tier": "small",
+      "description": "Fast MRR correctness and worker-cap test on stable code 1 3 3.",
+      "corpus": "tools/benchmark/corpus/small/stable-1-3-3.json",
+      "arguments": [
+        "--run_test=test_mrr_worker_count_is_deterministic_and_caps_tbb",
+        "--log_level=test_suite"
+      ],
+      "workerCounts": [1, 2],
+      "warmups": 0,
+      "samples": 5,
+      "correctnessRegex": "No errors detected"
+    },
+    {
+      "id": "calculate-known-regions-medium",
+      "tier": "medium",
+      "description": "Calculates every known nonempty code through length 15.",
+      "corpus": "tools/benchmark/corpus/medium/nonempty-codes-to-15.json",
+      "arguments": [
+        "--run_test=test_calculate_nonempty",
+        "--log_level=test_suite"
+      ],
+      "workerCounts": [1, 2, 4],
+      "warmups": 1,
+      "samples": 5,
+      "correctnessRegex": "No errors detected"
+    },
+    {
+      "id": "reported-long-cs-mrr",
+      "tier": "large",
+      "description": "The exact long CS that exposed MRR boundary/provenance and concurrency failures.",
+      "corpus": "tools/benchmark/corpus/large/reported-long-cs-mrr.json",
+      "arguments": [
+        "--run_test=benchmark_reported_long_cs_mrr",
+        "--log_level=test_suite"
+      ],
+      "environment": {
+        "BILLIARDS_RUN_BENCHMARKS": "1"
+      },
+      "workerCounts": [1, 2, 4],
+      "warmups": 1,
+      "samples": 5,
+      "correctnessRegex": "BENCH_RESULT hash=(?<hash>[0-9a-f]+)"
+    }
+  ]
+}

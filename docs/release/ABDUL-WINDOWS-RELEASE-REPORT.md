@@ -746,6 +746,26 @@ AutoPolyVary previously changed the viewer map for the next OBO coordinate and i
 
 Coordinate work is now gated by the matching image-commit callback. Rendering still runs in the background, the JavaFX thread commits the completed frame, and only then does AutoPolyVary inspect pixels and start vary. The terminal reports every point and its uncovered candidate count, including an explicit message for a legitimately fully covered view. The Java ordering regression test and `backendSharedLibrary test` passed on 2026-07-15.
 
+### 2026-07-16 Developer Handbook, Debugger, And Benchmark Tooling
+
+`docs/CODEBASE-HANDBOOK.md` is now the authoritative current-source learning path. It starts from the research workflow and progressively traces JavaFX handlers, Java domain objects, JNA/native ownership, C++ algorithms, mathematical representations, concurrency, testing, mixed debugging, and benchmarking. Older project/source/bug studies remain archived evidence rather than parallel manuals.
+
+`tools/docs/audit-handbook.ps1` invokes Universal Ctags in structured JSON mode, parses symbols rather than source text, generates native Doxygen XML, and checks stable handbook markers. Its generated Section 14.3 accounts for production and test fields, methods, classes, functions, types, and cases; the prose ledger separately distinguishes a listed symbol from a sufficiently explained algorithm. Because this Windows Ctags build otherwise calls unavailable Unix `sort -u`, the audit explicitly uses `--sort=no`. Windows PowerShell execution-policy commands use process-scoped `-ExecutionPolicy Bypass` and do not alter machine policy.
+
+`.vscode/tasks.json` and `.vscode/launch.json` add JDK 17 Java/JDWP attachment, UCRT64 GDB attachment to the same Java process, direct native Boost.Test debugging, an exact long-MRR debug launch, build/test tasks, documentation audit, and benchmark launch. The expected local tool paths are documented in the handbook.
+
+`tools/benchmark/` adds named small, medium, and large correctness-first workloads. The large case is the exact reported CS from BUG-009. A gated Boost case runs it once at a selected worker count and prints a stable FNV-1a regression digest built from interval endpoints, boundary equations, and `LeftRight` provenance. The runner builds outside timed samples, records Git/host/JVM/profile metadata, captures per-process wall time, CPU time when available, peak working set, stdout/stderr, warmups, and raw samples, and fails when the correctness signal is absent or hashes differ.
+
+Validation on 2026-07-16:
+
+- `compileJava backendSharedLibrary test testBackend` passed; the native suite ran 34 cases.
+- The final handbook audit reached 100 percent marker coverage for 2,708 current production/test symbols and generated native Doxygen XML.
+- A one-sample small workload smoke matrix completed for worker counts 1 and 2 and wrote a valid evidence bundle under `build/benchmarks/`.
+- JDK 17 was selected through `JAVA_HOME`; JDWP listening/attachment and UCRT64 GDB symbol resolution for Java-hosted native code and the Boost test executable were checked.
+- The exact long-CS workload completed one measured sample at 1, 2, and 4 workers with the same full-boundary hash `883e8b0c1317184e`; observed wall times were 8.069 s, 5.538 s, and 4.356 s. These are smoke timings, not a five-sample performance conclusion.
+
+The benchmark tools do not claim a performance improvement yet. A defensible result needs at least five optimized measured samples per worker count under matched metadata, plus identical correctness hashes.
+
 ## Known Remaining Risks
 
 ### Manual UI Testing Still Needed

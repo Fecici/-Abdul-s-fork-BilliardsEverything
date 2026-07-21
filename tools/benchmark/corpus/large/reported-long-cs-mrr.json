@@ -1,0 +1,13 @@
+{
+  "id": "reported-long-cs-mrr",
+  "provenance": "User-reported MRR failure reproduced and repaired on 2026-07-15",
+  "sanitized": true,
+  "codeType": "CS",
+  "codeSequence": "1 5 20 2 4 2 16 4 26 4 16 4 26 5 1 34 1 5 26 4 16 4 26 4 16 2 4 2 20 5 1 29 6 34 6 29 1 5 22 5 1 29 6 34 6 28 4 14 2 8 2 12 2 8 2 16 4 24 5 1 31 6 32 6 31 1 5 24 5 1 31 6 32 6 31 1 5 24 5 1 31 6 32 6 31 1 5 24 5 1 31 6 32 6 31 1 5 24 4 16 2 8 2 12 2 8 2 14 4 28 6 34 6 29 1 5 22 5 1 29 6 34 6 29",
+  "expected": [
+    "calculate_stable returns a nonempty MRR",
+    "the complete interval endpoints, equations, and LeftRight provenance hash is identical for every worker count",
+    "the process exits successfully"
+  ],
+  "warning": "This workload can take substantially longer than the normal suite."
+}

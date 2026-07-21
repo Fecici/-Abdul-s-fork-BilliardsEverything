@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant C as AutoPolyVary controller
+    participant M as PixelRadianMap
+    participant R as Render executor
+    participant F as JavaFX thread
+    participant V as PolyVaryTask
+    C->>M: set coordinate i
+    C->>R: prepare redraw generation i
+    R-->>F: completed images for i
+    F->>F: reject if stale, else commit i
+    F-->>C: afterCommit(i)
+    C->>C: sample committed pixels and build candidates
+    alt candidates exist
+        C->>V: start exactly one task for i
+        V-->>F: partial and terminal results
+        F-->>C: advance once
+    else no candidates
+        C->>C: print zero-work status and advance once
+    end

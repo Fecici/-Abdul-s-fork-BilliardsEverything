@@ -1,0 +1,14 @@
+flowchart LR
+    U[Researcher] --> FX[JavaFX Viewer / PatternFinder]
+    FX --> TASK[Java Task and executor controllers]
+    TASK --> DBJ[Java cache and database adapters]
+    DBJ --> JNA[JNA Wrapper]
+    JNA --> CABI[C exports in wrapper.cpp]
+    CABI --> ALG[C++ code / unfolding / equations / refinement]
+    CABI <--> SQL[(SQLite pool)]
+    ALG --> TBB[TBB and Boost worker stages]
+    CABI --> OWN[Native result allocation]
+    OWN --> JNA
+    JNA --> COPY[Java copy then native cleanup]
+    COPY --> COMMIT[Generation-checked JavaFX commit]
+    COMMIT --> U
